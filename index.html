@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf8">
+    <title>Simple Webcam Viewer</title>
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        font-family: 'Courier New', Courier, monospace;
+        color: white;
+      }
+      #VideoSourcesList{
+        position: fixed;
+        display: block;
+        top: 1em;
+        left: 0;
+        right: 0;
+        cursor: pointer;
+        background-color: rgba(32, 32, 48, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        border-width: 1px 0;
+      }
+      .VideoSourcesListError {
+        color:rgba(255, 196, 196, 1);
+        cursor: not-allowed;
+      }
+      .VideoSource {
+        display: block;
+        padding-left: 1em;
+      }
+      .VideoSource + .VideoSource {
+        border-top: 1px dashed rgba(255, 255, 255, 0.5);
+      }
+      .VideoSourceSelected {
+        background-color: rgba(255, 255, 255, 0.25);
+        transition: background-color 0.25s ease-out;
+      }
+      .VideoSource::before {
+        content: "\25CB";
+        padding-right: 1em;
+      }
+      .VideoSourceSelected::before {
+        content: "\25CF";
+      }
+      #WebCamVideo {
+        background: rgba(255, 0, 0, 0.25) url("no%20video.svg") center no-repeat;
+      }
+      .FadeIn {
+        transition: opacity 0.25s ease-out, filter 0.25s ease-out;
+        opacity: 1;
+        filter: blur(0);
+      }
+      .FadeOut {
+        transition: opacity 1s ease-in, filter 1s ease-in;
+        opacity: 0;
+        filter: blur(0.25em);
+      }
+    </style>
+    <script>
+      "use strict";
+      let gs0CurrentVideoSourceDescription = null,
+          uCurrentVideoSourceIndex = 0;
+      async function fd0axEnumerateVideoSources(oVideoSourcesListElement) {
+        oVideoSourcesListElement.textContent = "Enumerating video sources...";
+        let bTimedOut = false,
+            xTimeout = setTimeout(
+              () => {
+                bTimedOut = true;
+                oVideoSourcesListElement.textContent = "Enumerating video sources timed out.";
+                oVideoSourcesListElement.classList.add("VideoSourcesListError");
+              },
+              1000
+            ),
+            aoDeviceInfos = await navigator.mediaDevices.enumerateDevices(),
+            daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription = {},
+            bVideoSourcesFound = false;
+        if (bTimedOut) return null;
+        clearTimeout(xTimeout);
+        console.log("aoDeviceInfos:");
+        console.log(aoDeviceInfos);
+        for (var uDeviceIndex = 0; uDeviceIndex < aoDeviceInfos.length; uDeviceIndex++) {
+          let oDeviceInfo = aoDeviceInfos[uDeviceIndex];
+          console.log("oDeviceInfo #" + uDeviceIndex + ":");
+          console.log(oDeviceInfo);
+          if (oDeviceInfo.kind == "videoinput") {
+            let oMediaStream;
+            try {
+              oMediaStream = await navigator.mediaDevices.getUserMedia(
+                {"video": {"deviceId": oDeviceInfo.deviceId}}
+              );
+            } catch (oError) {
+              console.log("Cannot get media stream:");
+              console.log(oError);
+              continue;
+            };
+            console.log("oDeviceInfo #" + uDeviceIndex + " oMediaStream:");
+            console.log(oMediaStream);
+            let aoMediaStreamTracks = oMediaStream.getVideoTracks();
+            for (var uTrackIndex = 0; uTrackIndex < aoMediaStreamTracks.length; uTrackIndex++) {
+              let oMediaStreamTrack = aoMediaStreamTracks[uTrackIndex];
+              console.log("oDeviceInfo #" + uDeviceIndex + " oMediaStreamTrack #" + uTrackIndex + ":");
+              console.log(oMediaStreamTrack);
+              try {
+                await oMediaStreamTrack.applyConstraints(
+                  {
+                    "framerate": 99999,
+                    "width": {"ideal": 99999},
+                    "height": {"ideal": 99999}
+                  }
+                );
+              } catch (oError) {
+                console.warn("Cannot apply constraints to maximize video resolution and fps:");
+                console.warn(oError);
+              };
+              // Get the resulting constraints and resize the video element accordingly.
+              let oMediaStreamTrackSettings = await oMediaStreamTrack.getSettings(),
+                  sDescription = (
+                    "Device #" + uDeviceIndex +
+                    " " + (oDeviceInfo.label ? JSON.stringify(oDeviceInfo.label) : "[Unnamed]") +
+                    ", track #" + uTrackIndex +
+                    " " + (oMediaStreamTrack.label ? JSON.stringify(oMediaStreamTrack.label) : "[Unnamed]") +
+                    ": " + oMediaStreamTrackSettings.width +
+                    "\xD7" + oMediaStreamTrackSettings.height +
+                    " @ " + oMediaStreamTrackSettings.frameRate +
+                    "fps."
+                  );
+              console.log("oDeviceInfo #" + uDeviceIndex + " oMediaStreamTrack #" + uTrackIndex + " oMediaStreamTrackSettings:");
+              console.log(oMediaStreamTrackSettings);
+              console.log("=> Video Source: " + sDescription);
+              daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription[sDescription] = [
+                oDeviceInfo, oMediaStream, oMediaStreamTrack, uTrackIndex, oMediaStreamTrackSettings
+              ];
+              bVideoSourcesFound = true;
+            };
+          };
+        };
+        console.log(
+          "Enumerating video sources completed: " +
+          Object.keys(daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription).length +
+          " sources found."
+        );
+        return bVideoSourcesFound ? daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription : null;
+      };
+      function fCreateVideoSourcesListElementsAndSelectFirst(
+        daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription,
+        oVideoSourcesListElement
+      ) {
+        oVideoSourcesListElement.textContent = "";
+        console.log("Creating video sources list elements...");
+        let asVideoSourceDescriptions = Object.keys(
+              daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription
+            ),
+            asAlphabeticallySortedVideoSourceDescriptions = asVideoSourceDescriptions.sort(
+              (sLabel1, sLabel2) => sLabel1.localeCompare(sLabel2)
+            ),
+            bFirstVideoSourceSelected = false,
+            aoVideoSourceElements = [];
+         asAlphabeticallySortedVideoSourceDescriptions.forEach(
+          (sDescription) => {
+            let [
+                  oDeviceInfo,
+                  oMediaStream,
+                  oMediaStreamTrack,
+                  uTrackIndex,
+                  oMediaStreamTrackSettings
+                ] = daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription[sDescription],
+                oVideoSourceElement = oVideoSourcesListElement.appendChild(document.createElement("div"));
+            oVideoSourceElement.textContent = sDescription;
+            oVideoSourceElement.className = "VideoSource";
+            aoVideoSourceElements.push(oVideoSourceElement);
+            oVideoSourceElement.addEventListener(
+              "click",
+              () => fSelectVideoSource(
+                oDeviceInfo,
+                oMediaStream,
+                oMediaStreamTrack,
+                uTrackIndex,
+                oMediaStreamTrackSettings,
+                aoVideoSourceElements,
+                oVideoSourceElement
+              )
+            );
+            if (!bFirstVideoSourceSelected) {
+              bFirstVideoSourceSelected = true;
+              fSelectVideoSource(
+                oDeviceInfo,
+                oMediaStream,
+                oMediaStreamTrack,
+                uTrackIndex,
+                oMediaStreamTrackSettings,
+                aoVideoSourceElements,
+                oVideoSourceElement
+              );
+            };
+          }
+        );
+        if (!bFirstVideoSourceSelected) {
+          oVideoSourcesListElement.textContent = "No video sources found!";
+          oVideoSourcesListElement.classList.add("VideoSourcesListError");
+        };
+        console.log("Creating video sources list elements completed.");
+      };
+      function fSelectVideoSource(
+        oDeviceInfo,
+        oMediaStream,
+        oMediaStreamTrack,
+        uTrackIndex,
+        oMediaStreamTrackSettings,
+        aoVideoSourceElements,
+        oSelectedVideoSourceElement
+      ) {
+        console.log("Selecting video source...");
+        console.log("oDeviceInfo:");
+        console.log(oDeviceInfo);
+        console.log("oMediaStream:");
+        console.log(oMediaStream);
+        console.log("oMediaStreamTrack:");
+        console.log(oMediaStreamTrack);
+        console.log("uTrackIndex: " + uTrackIndex);
+        console.log("oMediaStreamTrackSettings:");
+        console.log(oMediaStreamTrackSettings);
+        console.log("oSelectedVideoSourceElement:");
+        console.log(oSelectedVideoSourceElement);
+        let oVideoElement = document.getElementById("WebCamVideo");
+        aoVideoSourceElements.forEach(
+          oVideoSourceElement => {
+            if (oVideoSourceElement == oSelectedVideoSourceElement) {
+              oVideoSourceElement.classList.add("VideoSourceSelected");
+            } else {
+              oVideoSourceElement.classList.remove("VideoSourceSelected");
+            };
+          }
+        );
+        // Set the source for the video element to the media stream.
+        if ("srcObject" in oVideoElement) {
+          console.log("Using <video>.srcObject = ...;");
+          oVideoElement.removeAttribute("src");
+          oVideoElement.srcObject = oMediaStream;
+        } else {
+          console.log("Using <video>.src = URL.createObjectURL(...);");
+          oVideoElement.removeAttribute("srcObject");
+          oVideoElement.src = URL.createObjectURL(oMediaStream);
+        };
+        // Select the video track - browser support is not available yet.
+        if (oVideoElement.videoTracks) {
+          console.log("Selecting <video>.videoTracks[" + uTrackIndex + "]");
+          oVideoElement.videoTracks[uTrackIndex].selected = True;
+        };
+        // Apply width and height:
+        oVideoElement.style.width = oMediaStreamTrackSettings.width;
+        oVideoElement.style.height = oMediaStreamTrackSettings.height;
+        console.log("Selecting video source completed.");
+      };
+
+      let gx0FadeOutTimeout = null;
+      function fShowVideoSourcesListElement(oVideoSourcesListElement) {
+        if (gx0FadeOutTimeout) clearTimeout(gx0FadeOutTimeout);
+        if (!oVideoSourcesListElement.classList.contains("FadeIn")) {
+          console.log("Video source list fade-in...");
+          oVideoSourcesListElement.classList.remove("FadeOut");
+          oVideoSourcesListElement.classList.add("FadeIn");
+        };
+        gx0FadeOutTimeout = setTimeout(
+          () => fHideVideoSourcesListElement(oVideoSourcesListElement),
+          3 * 1000
+        );
+      };
+      function fHideVideoSourcesListElement(oVideoSourcesListElement) {
+        console.log("Video source list fade-out...");
+        if (!oVideoSourcesListElement.classList.contains("FadeOut")) {
+          oVideoSourcesListElement.classList.remove("FadeIn");
+          oVideoSourcesListElement.classList.add("FadeOut");
+        };
+      };
+      addEventListener("load", async () => {
+        let oVideoSourcesListElement = document.getElementById("VideoSourcesList");
+        console.log("Page loaded; enumerting video sources...");
+        let d0axVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription =
+                await fd0axEnumerateVideoSources(oVideoSourcesListElement);
+        if (d0axVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription) {
+          let daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription = d0axVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription;
+          console.log("Video sources found; creating video sources list elements and selecting first...");
+          fCreateVideoSourcesListElementsAndSelectFirst(
+            daxVideoSourceDeviceInfoStreamTrackAndSettings_by_sDescription,
+            oVideoSourcesListElement
+          );
+          console.log("Page loaded; showing video sources list...");
+          fShowVideoSourcesListElement(oVideoSourcesListElement);
+          console.log("Page loaded; adding mouse and key events...");
+          ["mousemove", "keydown", "keyup"].forEach(
+            (sEventName) => {
+              document.body.addEventListener(
+                sEventName,
+                () => fShowVideoSourcesListElement(oVideoSourcesListElement)
+              );
+            }
+          );
+        };
+        console.log("Page loaded and initialized.");
+      });
+      console.log("No syntax errors");
+    </script>
+  </head>
+  <body>
+    <video id="WebCamVideo" autoplay></video>
+    <span id="VideoSourcesList" class="FadeIn">Loading...</span>
+  </body>
+</html>
+
